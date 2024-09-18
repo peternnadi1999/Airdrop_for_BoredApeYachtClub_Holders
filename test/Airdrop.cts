@@ -5,7 +5,7 @@ import { impersonateAccount } from "@nomicfoundation/hardhat-toolbox/network-hel
 import { StandardMerkleTree } from "@openzeppelin/merkle-tree";
 
 describe("Airdrop", function () {
-  let tree, root, validProof;
+  let tree, root;
 
   async function deployToken() {
     const [owner, otherAccount] = await hre.ethers.getSigners();
@@ -16,57 +16,109 @@ describe("Airdrop", function () {
   }
 
   async function deployAirdrop() {
+    const [owner] = await hre.ethers.getSigners();
+
+    const adr1 = "0xbB05F71952B30786d0aC7c7A8fA045724B8d2D69";
+    const adr2 = "0xCA1257Ade6F4fA6c6834fdC42E030bE6C0f5A813";
+    const adr3 = "0xe67112647B7aEA8b7490F27e1c75208868138df2";
+
     const values = [
-      ["0xbB05F71952B30786d0aC7c7A8fA045724B8d2D69", ethers.parseUnits("100")],
-      ["0xCA1257Ade6F4fA6c6834fdC42E030bE6C0f5A813", ethers.parseUnits("200")],
-      ["0xe67112647B7aEA8b7490F27e1c75208868138df2", ethers.parseUnits("300")],
+      [adr1, ethers.parseUnits("100")],
+      [adr2, ethers.parseUnits("200")],
+      [adr3, ethers.parseUnits("300")],
     ];
 
     tree = StandardMerkleTree.of(values, ["address", "uint256"]);
     root = tree.root;
-    validProof = tree.getProof([values[0][0], values[0][1], values[0][2]]);
-
-    const BAYC_TOKEN = "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D";
-    const BAYC_CONTRACT = await hre.ethers.getContractAt(
-      "IERC721",
-      BAYC_TOKEN
-    );
 
     const { token } = await loadFixture(deployToken);
 
     const Airdrop = await hre.ethers.getContractFactory("Airdrop");
     const airdrop = await Airdrop.deploy(token, root);
 
-    return { airdrop, validProof, BAYC_CONTRACT };
+    await token.transfer(
+      await airdrop.getAddress(),
+      ethers.parseEther("10000")
+    );
+
+    return { airdrop, tree, adr1, adr2, owner, token };
   }
 
+  it("Should deploy the contract with correct Merkle root", async function () {
+    const { airdrop, tree, token } = await loadFixture(deployAirdrop);
+
+    expect(await airdrop.tokenAddress()).to.be.equal(await token.getAddress());
+    expect(await airdrop.merkleRoot()).to.equal(tree.root);
+  });
+
   describe("Claim", function () {
-    it("Should check wheather the if the user has the BAYC NFT", async function () {
-      const { airdrop, validProof, BAYC_CONTRACT } = await loadFixture(deployAirdrop);
-      const { token } = await loadFixture(deployToken);
+    it("Should revert if user does not own BAYC NFT", async function () {
+      const { owner, airdrop, adr1, tree } = await loadFixture(deployAirdrop);
 
-      token.transfer(airdrop, ethers.parseUnits("10000"));
-      const add1 = "0xbB05F71952B30786d0aC7c7A8fA045724B8d2D69";
-      await impersonateAccount(add1);
-      const impersonatedSigner = await hre.ethers.getSigner(add1);
-      
+      await impersonateAccount(adr1);
+      const impersonatedSigner = await ethers.getSigner(adr1);
 
-      const bal = await BAYC_CONTRACT.balanceOf(impersonatedSigner.address);
-      console.log(validProof);
-      console.log(bal);
+      await owner.sendTransaction({
+        to: impersonatedSigner,
+        value: ethers.parseEther("1"),
+      });
 
-      // expect(await BAYC_CONTRACT.balanceOf(impersonatedSigner)).not.to.be.equal(
-      //   0
-      // );
+      const leaf = [adr1, ethers.parseEther("100")];
+      const proof = tree.getProof(leaf);
 
-      const claim = await airdrop
-        .connect(impersonatedSigner)
-        .claimAirdrop(validProof, 100);
-      expect(claim).emit(airdrop, "ClaimSuccessful");
+      expect(
+        await airdrop
+          .connect(impersonatedSigner)
+          .claimAirdrop(proof, ethers.parseUnits("100"))
+      ).to.be.revertedWith(
+        "You need BoredApeYatchClub (BAYC) NFT before you can claim."
+      );
     });
 
-    it("Check if user have claimed before", async () => {
-      const { airdrop } = await loadFixture(deployAirdrop);
+    it("Should revert if Merkle proof is invalid", async function () {
+      const { owner, airdrop, adr1, tree } = await loadFixture(deployAirdrop);
+
+      const leaf = [adr1, ethers.parseUnits("100")];
+      const proof = tree.getProof(leaf);
+
+      await impersonateAccount(adr1);
+      const impersonatedSigner = await ethers.getSigner(adr1);
+
+      await owner.sendTransaction({
+        to: impersonatedSigner,
+        value: ethers.parseEther("1"),
+      });
+
+      expect(
+        await airdrop
+          .connect(impersonatedSigner)
+          .claimAirdrop(proof, ethers.parseUnits("100"))
+        ).to.be.revertedWith("Invalid proof");
+    });
+
+    it("Should revert if user tries to claim twice", async function () {
+      const { owner, airdrop, adr1, tree } = await loadFixture(deployAirdrop);
+
+      await impersonateAccount(adr1);
+      const impersonatedSigner = await ethers.getSigner(adr1);
+
+      await owner.sendTransaction({
+        to: impersonatedSigner,
+        value: ethers.parseEther("1"),
+      });
+
+      const leaf = [adr1, ethers.parseEther("100")];
+      const proof = tree.getProof(leaf);
+
+      await airdrop
+        .connect(impersonatedSigner)
+        .claimAirdrop(proof, ethers.parseEther("100"));
+
+      await expect(
+        airdrop
+          .connect(impersonatedSigner)
+          .claimAirdrop(proof, ethers.parseEther("100"))
+      ).to.be.revertedWithCustomError(airdrop, "AirdropAlreadyClaimed");
     });
   });
 });
