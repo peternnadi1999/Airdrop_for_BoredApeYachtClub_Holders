@@ -13,6 +13,7 @@ contract Airdrop {
 
 
     event ClaimSuccessful();
+    error AirdropAlreadyClaimed();
     
     constructor(address _tokenAddress, bytes32 _merkleRoot) {
         owner = msg.sender;
@@ -28,8 +29,8 @@ contract Airdrop {
         if(IERC721(nftAddress).balanceOf(msg.sender) == 0){
             revert ("You need BoredApeYatchClub (BAYC) NFT before you can claim.");
         }
-        if(!hasClaimed[msg.sender]){
-            revert ("Airdrop already claimed.");
+        if(hasClaimed[msg.sender]){
+            revert AirdropAlreadyClaimed();
         }
         
         bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender, amount))));
