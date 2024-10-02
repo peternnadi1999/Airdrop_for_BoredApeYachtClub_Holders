@@ -42,8 +42,6 @@ contract Airdrop {
        emit ClaimSuccessful();
     }
 
-    function eligibility() external{
-
-    }
+   
 
 }
